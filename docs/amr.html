@@ -1,0 +1,493 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>AMR - Bitstring implementation of a 2D square adaptive mesh.</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@localhost" />
+</head>
+
+<body style="background-color: white">
+
+
+<!-- INDEX BEGIN -->
+<div name="index">
+<p><a name="__index__"></a></p>
+
+<ul>
+
+	<li><a href="#name">NAME</a></li>
+	<li><a href="#version_1_0">VERSION 1.0</a></li>
+	<li><a href="#description">DESCRIPTION</a></li>
+	<li><a href="#naming_scheme">NAMING SCHEME</a></li>
+	<li><a href="#properties_of_the_binary_space">PROPERTIES OF THE BINARY SPACE</a></li>
+	<li><a href="#implementation">IMPLEMENTATION</a></li>
+	<ul>
+
+		<li><a href="#bitstring_and_cell_representation">BITSTRING AND CELL REPRESENTATION</a></li>
+		<li><a href="#efficient_grid_traversal_and_nearest_neighbour_lookups">EFFICIENT GRID TRAVERSAL AND NEAREST NEIGHBOUR LOOKUPS</a></li>
+		<li><a href="#unit_tests">UNIT TESTS</a></li>
+		<li><a href="#demonstration_code">DEMONSTRATION CODE</a></li>
+	</ul>
+
+	<li><a href="#exported_routines">EXPORTED ROUTINES</a></li>
+	<li><a href="#utility_functions">UTILITY FUNCTIONS</a></li>
+	<li><a href="#author">AUTHOR</a></li>
+	<li><a href="#licence_and_copyright">LICENCE AND COPYRIGHT</a></li>
+</ul>
+
+<hr name="index" />
+</div>
+<!-- INDEX END -->
+
+<p>
+</p>
+<h1><a name="name">NAME</a></h1>
+<p>AMR - Bitstring implementation of a 2D square adaptive mesh.</p>
+<p>
+</p>
+<hr />
+<h1><a name="version_1_0">VERSION 1.0</a></h1>
+<p>Eric Saunders, June 2008</p>
+<p>
+</p>
+<hr />
+<h1><a name="description">DESCRIPTION</a></h1>
+<p>This module implements a 2D square adaptive mesh. Each cell of the mesh is fully
+specified using a custom binary notation, which also stores the full ancestory
+of each cell. The binary encoding is implemented using bitstrings, which allow
+for extremely dense packing of data. The mesh representation can be efficiently
+traversed to generate a list of the immediate neighbours of each cell. This is a
+graph, where each node is a cell, and each edge between nodes indicates a
+neighbour relationship.</p>
+<p>
+</p>
+<hr />
+<h1><a name="naming_scheme">NAMING SCHEME</a></h1>
+<p>Each cell in the grid is assigned a binary name that uniquely defines its
+position and size relative to the root cell (the cell with dimensions of the
+grid itself) in each dimension. A cell's name is defined recursively, by its
+relative position with respect to its immediate ancestor. For example, a cell
+must be in either the left or right half of its parent cell, and also in either
+the top or bottom half. These four possibilities could be represented
+symbolically as</p>
+<pre>
+ L D  left-down
+ L U  left-up
+ R D  right-down
+ R U  right-up</pre>
+<p>Similarly, the parent cell is named relative to its parent. If the leftmost
+element of the name represents the first level of refinement (i.e. the
+relationship of the first children to the root cell), then the absolute name of
+any cell is the recursive chain of parent-child relationships.</p>
+<p>Figure 1 demonstrates the naming scheme for a grid of 12 cells (ignoring the
+root cell), with three levels of refinement.</p>
+<pre>
+                                                          id=2
+                                                  -----|  R  1
+     ----------------------- ----------- -----------   |  U  1
+    |                       |           |           |  |
+    |                       |   id=5    |   id=6    |
+    |         id=1          |           |           |
+    |                       |   RL 10   |  RR 11    |
+    |                       |   UU 11   |  UU 11    |
+    |         L  0           ----- ----- -----------
+    |         U  1          |  9  | 10  |           |     id 7  RL 10
+    |                       |     |     |  id=8     |     |     UD 10
+    |                        ----- -----            |     |
+    |                       | 11  | 12  |  RR 11    |     |---id 9  RLL 100
+    |                       |     |     |  UD 10    |     |         UDU 101
+     ----------------------- ----- ----- -----------|     |
+    |                       |                       |     |--id 10  RLR 101
+    |                       |                       |     |         UDU 101
+    |         id=3          |         id=4          |     |
+    |                       |                       |     |--id 11  RLL 100
+    |         L  0          |         R  1          |     |         UDD 100
+    |         D  0          |         D  0          |     |
+    |                       |                       |     |--id 12  RLR 101
+    |                       |                       |               UDD 100
+    |                       |                       |
+    |                       |                       |
+    |                       |                       |
+     ----------------------- -----------------------</pre>
+<pre>
+     Figure 1   AMR grid: 12 cells, 3 generations.</pre>
+<p>For example, cell 9 is called 'RLL UDU'. This can be read as &quot;In the right-up
+corner of the root cell, then in the left-down corner of that cell, then in the
+left-up corner of that cell&quot;. A cell's level of refinement is called its
+'generation'. Cell 9 has a generation of 3. It is apparent that the generation
+of  a cell is equal to the length of that cell's name in each dimension.</p>
+<p>The efficiency of the naming scheme is made possible by the very restricted
+geometry of the grid, where all cells are square, and symmetric quadrisection is
+the only method of cell refinement.</p>
+<p>If we define the name according to a convention that tells us where each
+dimension begins and ends, and define a positive direction in each dimension,
+then we can replace the symbolic 'LRUD' with true binary, with no loss of
+information.</p>
+<p>For example, for cell 9</p>
+<p>If L=0, R=1 and D=0, U=1, then</p>
+<pre>
+ RLL =&gt; 100
+ UDU =&gt; 101</pre>
+<p>
+</p>
+<hr />
+<h1><a name="properties_of_the_binary_space">PROPERTIES OF THE BINARY SPACE</a></h1>
+<p>The binary space thus defined has some particularly useful properties.</p>
+<ol>
+<li>
+<p><strong>It is quantised.</strong> The complete set of all allowed positions in each dimension
+of a 3rd generation grid is</p>
+<pre>
+ 0                 1
+ 00       01       10       11
+ 000 001  010 011  100  101 110 111</pre>
+<p>Ordering these gives</p>
+<p>(0, 00, 000, 001, 01, 010, 011 , 1, 10, 100, 101, 11, 110, 111)</p>
+<p>No other positions are possible. This means that if the generation of the grid
+is known then certain facts, such as the identity of the smallest next possible
+cell, can be deduced by an algorithm without the need for any brute force
+searching. Another example arising from the symmetric bisection in each
+dimension is that if the existence of cell 10 is known, then the existence of
+cell 11 can be deduced. This is the same as saying 'if cell 1 has children,
+there must be exactly two of them, and they must be called 10 and 11'.</p>
+</li>
+<li>
+<p><strong>It allows distances to be calculated.</strong></p>
+<p>If we assume the convention that the cell position refers to the position of
+the most negative corner (i.e. left-bottom in 2D), then</p>
+<pre>
+ 0 == 00 == 000</pre>
+<p>all specify the same x point (the left-edge of a 2D grid). Note that</p>
+<pre>
+ 1 == 10 == 100</pre>
+<p>specifies the centre of the x dimension, and that the highest allowed value,
+111, specifies the left hand edge of the smallest right-most cell.</p>
+<p>This convention effectively shrinks the grid of Figure 1 to the following set
+of points:</p>
+<pre>
+                               5           6
+   11-.     .     .     .     X     .     X     .
+      |
+      |                        9     10
+  101-.     .     .     .     X     X     .     .
+      |
+      |1                     2,7,11  12    8
+    1-X     .     .     .     X     X     X     .
+      |
+      |
+  011-.     .     .     .     .     .     .     .
+      |
+      |
+   01-.     .     .     .     .     .     .     .
+      |
+      |
+  001-.     .     .     .     .     .     .     .
+      |
+      |3                       4
+    0-X-----.-----.-----.-----X-----.-----.-----.
+      |     |     |     |     |     |     |     |
+      0     001   01    011   1     101   11    111</pre>
+<pre>
+     Figure 2   AMR grid, after shrinking to corners. '.' indicates
+     an allowed quantisation. 'x' indicates the presence of a cell.</pre>
+<p>As Figure 2 shows, the corner convention preserves the distances between cells.
+This means that distances can be calculated using simple binary subtraction.</p>
+<p>Note that there is still no loss of information, since the cell walls can be
+reconstructed if their generations are known.</p>
+</li>
+</ol>
+<p>
+</p>
+<hr />
+<h1><a name="implementation">IMPLEMENTATION</a></h1>
+<p>
+</p>
+<h2><a name="bitstring_and_cell_representation">BITSTRING AND CELL REPRESENTATION</a></h2>
+<p>The encoding scheme is implemented in this module using bitstrings (sometimes
+called bit vectors). A bitstring uses each bit as a flag to allow the efficient
+storage and manipulation of boolean values. A single byte of memory allows the
+storage of an 8th generation cell position in one dimension.</p>
+<p>In this implementation, the most significant bit is leftmost (as with standard
+numbers). Bitstrings have been implemented using <code>vec()</code>, which always allocates 8
+bits at a time. For this reason, the generation must be stored seperately. It is
+possible to implement the bitstrings directly using <code>pack()</code> and <code>unpack()</code>, which
+would allow fine grained control of length. This is significantly lower level
+however, so is beyond the scope of this prototype.</p>
+<p>For convenience, a cell structure is defined. In a truly memory-intensive code,
+much of this could be dispensed with. Cells in this module look like this:</p>
+<pre>
+ $cell = {
+           id          =&gt; 1,
+           lr          =&gt; '',
+           ud          =&gt; '',
+           gen         =&gt; '',
+           is_a_parent =&gt; ''
+         }</pre>
+<p>
+</p>
+<h2><a name="efficient_grid_traversal_and_nearest_neighbour_lookups">EFFICIENT GRID TRAVERSAL AND NEAREST NEIGHBOUR LOOKUPS</a></h2>
+<p>The <a href="#crawl_grid"><code>crawl_grid()</code></a> function efficiently traverses the grid by deducing cell jumps,
+and uses recursion in each both directions of each dimension to guarantee a full
+traversal. It can be used to generate a list of neighbours for every cell, which
+can be stored at the same time the grid is generated. Although cell structures
+are used here, if size is an issue, the list could be efficiently stored using
+bitstrings alone. The existence of such a list makes nearest neighbour lookups
+and radius inclusion tests trivial.</p>
+<p>
+</p>
+<h2><a name="unit_tests">UNIT TESTS</a></h2>
+<p>Many of the results of functions in this module are not trivially verifiable.
+The module comes with a comprehensive suite of unit tests (amr.t), which may be
+run from the command line by</p>
+<p>$ perl amr.t</p>
+<p>to check function correctness.</p>
+<p>
+</p>
+<h2><a name="demonstration_code">DEMONSTRATION CODE</a></h2>
+<p>The supplied run_amr.pl code demonstrates the use of the module. It may be run
+interactively or fully specified by command line flags (try --help for options).
+The CPAN module GD::Simple is required to display output.</p>
+<p>
+</p>
+<hr />
+<h1><a name="exported_routines">EXPORTED ROUTINES</a></h1>
+<dl>
+<dt><strong><a name="build_neighbour_list" class="item"><strong>build_neighbour_list</strong></a></strong></dt>
+
+<dd>
+<p>Given a starting cell, the maximum generation a cell in the grid can be, and a
+list of cells to crawl, returns the complete list of edges (links between
+neighbours).</p>
+<p>$edge_list = build_neighbour_list($current_cell, $max_gen, @cells_to_crawl);</p>
+<p>$edge_list = [
+               [cell1, cell2],
+               [cell3, cell4],
+               ...
+             ]</p>
+</dd>
+<dt><strong><a name="crawl_grid" class="item"><strong>crawl_grid</strong></a></strong></dt>
+
+<dd>
+<p>Given a starting cell, the maximum generation a cell in the grid can be, an
+inclusion function that tests for some condition, and a list of cells to crawl,
+returns the complete list of cells that pass the test.</p>
+<p>$member_list = crawl_grid($current_cell, $max_gen, [], $inclusion_fn,
+                          @cells_to_crawl);</p>
+<p>$edge_list = [
+               [cell1, cell2],
+               [cell3, cell4],
+               ...
+             ]</p>
+</dd>
+<dt><strong><a name="build_random_grid" class="item"><strong>build_random_grid</strong></a></strong></dt>
+
+<dd>
+<p>Given a cell limit, the maximum allowed generation of a cell, and a starting id
+number and initial cell, returns a random quadrisected grid. Until the cell
+limit is reached, cells are chosen at random and quadrisected. The final set of
+cells and the maximum generation attained are returned.</p>
+<p>($cell_list, $highest_gen) = build_random_grid($max_cells, $max_gen,
+                                               $starting_id, $initial_cell);</p>
+<p>$cell_list = [$cell_1, $cell_2, ...]</p>
+</dd>
+<dt><strong><a name="get_next_cell" class="item"><strong>get_next_cell</strong></a></strong></dt>
+
+<dd>
+<p>Given a starting cell, a direction to move in, the maximum generation of a
+cell on the grid, and a list of cells to search, returns the next cell in that
+direction. If there is no next cell, you've reached the edge of the grid, and
+undef is returned.</p>
+<p>$next_cell = get_next_cell($current_cell, $direction, $max_gen,
+                           @cells_to_search);</p>
+</dd>
+<dt><strong><a name="find_next_cell_bitstring" class="item"><strong>find_next_cell_bitstring</strong></a></strong></dt>
+
+<dd>
+<p>Given the bitstring of the current cell in the relevant dimension, the direction
+of travel, and the generation to jump to, returns the bitstring corresponding to
+the next pertinent cell in this direction. The generation provided must be the
+maximum if the direction is negative (l,d), or the current generation of the
+cell otherwise. Note also that the return value is a calculation, not a lookup.</p>
+<p>$next_bs = find_next_cell_bitstring($current_bs, $dir, $generation);</p>
+</dd>
+<dt><strong><a name="find_matching_cell" class="item"><strong>find_matching_cell</strong></a></strong></dt>
+
+<dd>
+<p>Given two bitstrings and a generation to specify a target cell, and a list of
+cells to search, returns the exact cell, if it exists, or if not, the nearest
+matching parent cell.</p>
+<p>$matching_cell = find_matching_cell($x_bs, $y_bs, $target_gen,
+                                    @cells_to_search);</p>
+</dd>
+<dt><strong><a name="bitstrings_match" class="item"><strong>bitstrings_match</strong></a></strong></dt>
+
+<dd>
+<p>Returns true if two bitstrings match, or false otherwise. Bitstrings only match
+if every bit is identical up to the bit of the highest supplied generation.</p>
+<p>$matched_flag = bitstrings_match($bs1, $bs2, $gen);</p>
+</dd>
+<dt><strong><a name="subtract_bitstrings" class="item"><strong>subtract_bitstrings</strong></a></strong></dt>
+
+<dd>
+<p>Returns the binary subtraction of two bitstrings.</p>
+<p>$result_bs = subtract_bitstrings($bs1, $bs2, $gen);</p>
+</dd>
+<dt><strong><a name="incr_bitstring" class="item"><strong>incr_bitstring</strong></a></strong></dt>
+
+<dd>
+<p>Increments a bitstring by its least significant digit, carrying if necessary.
+This effectively moves one current cell width in the positive direction in
+binary space.</p>
+<p>$incremented_bs = incr_bitstring($bs, $gen);</p>
+</dd>
+<dt><strong><a name="compare_bitstrings" class="item"><strong>compare_bitstrings</strong></a></strong></dt>
+
+<dd>
+<p>Given two bitstrings and a generation (length), returns 1 if 0, or -1, depending
+on whether bitstring 1 is bigger, the same, or smaller than bitstring 2.</p>
+<p>$comparison = compare_bitstrings($bs1, $bs2, $gen);</p>
+</dd>
+<dt><strong><a name="sort_bitstrings" class="item"><strong>sort_bitstrings</strong></a></strong></dt>
+
+<dd>
+<p>Version of compare_bitstrings modified for passing to <code>sort()</code>. An eight bit
+comparison is assumed.</p>
+<p>my @sorted_bitstrings = sort <a href="#sort_bitstrings"><code>sort_bitstrings(@bitstrings)</code></a>;</p>
+</dd>
+<dt><strong><a name="get_cell_neighbours" class="item"><strong>get_cell_neighbours</strong></a></strong></dt>
+
+<dd>
+<p>Given a target cell and a list of neighbour relationships (edges), returns the
+other end of each edge containing the target cell, i.e. returns a flat list of
+neighbours of the target cell.</p>
+<p>$neighbours_list = get_cell_neighbours($target_cell, $edge_list);</p>
+<p>$neighbours_list = [ $cell_1, $cell_2, ...];</p>
+</dd>
+<dt><strong><a name="get_all_cells_within_radius" class="item"><strong>get_all_cells_within_radius</strong></a></strong></dt>
+
+<dd>
+<p>Given a starting cell, a radius expressed as a fraction of the grid  length, and
+a list of neighbours, returns all cells whose centres fall within a square box
+centred on the starting cell.</p>
+<p>$enclosed_cells = get_all_cells_within_radius($this_cell, $radius, $edge_list);</p>
+</dd>
+<dt><strong><a name="cell_is_within_radius" class="item"><strong>cell_is_within_radius</strong></a></strong></dt>
+
+<dd>
+<p>Given a starting cell, a radius expressed as a fraction of the grid  length, and
+a target cell, returns true if that cell centre falls within the radius, or
+false otherwise.</p>
+<p>$boolean_flag = cell_is_within_radius($radius, $origin_cell, $target_cell);</p>
+</dd>
+<dt><strong><a name="length_to_bitstring" class="item"><strong>length_to_bitstring</strong></a></strong></dt>
+
+<dd>
+<p>Given a length expressed as a fraction of the grid length, and the maximum
+generation of a cell in the grid, returns the binary representation of that
+length, to the maximum fidelity of the grid. Note that partial remainders are
+included - this function will always cover the full radius, and any extra
+overlap forced by the (lack of) grid precision.</p>
+<p>$rad_bs = length_to_bitstring($radius, $max_gen);</p>
+</dd>
+<dt><strong><a name="cell_is_in_list" class="item"><strong>cell_is_in_list</strong></a></strong></dt>
+
+<dd>
+<p>Returns true if $cell is found in @list. Cells are compared by id
+(NOT bitstring).</p>
+<p>$cell_present = cell_is_in_list($cell, @list);</p>
+</dd>
+<dt><strong><a name="edge_is_in_list" class="item"><strong>edge_is_in_list</strong></a></strong></dt>
+
+<dd>
+<p>Returns true if $edge is in @list, or false otherwise.</p>
+<p>$edge_present = edge_is_in_list($edge, @list);</p>
+</dd>
+<dt><strong><a name="deduce_siblings" class="item"><strong>deduce_siblings</strong></a></strong></dt>
+
+<dd>
+<p>Calculates the bitstrings of the siblings of the provided cell, based on the
+fact that cells are always quadrisected into groups of four children.</p>
+<p>[$horiz_sibling, $vert_sibling] = <a href="#deduce_siblings"><code>deduce_siblings($target_cell)</code></a>;</p>
+</dd>
+<dt><strong><a name="grep_siblings" class="item"><strong>grep_siblings</strong></a></strong></dt>
+
+<dd>
+<p>Returns any cells in $cells_to_search matching the provided sibling bitstrings.</p>
+<p>@sibling_cells = grep_siblings([$horiz_sibling, $vert_sibling],
+                               $cells_to_search);</p>
+<p>@sibling_cells = ($sibling_1, $sibling_2);</p>
+</dd>
+<dt><strong><a name="find_all_cell_corners" class="item"><strong>find_all_cell_corners</strong></a></strong></dt>
+
+<dd>
+<p>Returns a list of corner coordinates for every provided cell.</p>
+<p>@coords_list = <a href="#find_all_cell_corners"><code>find_all_cell_corners(@cells)</code></a>;</p>
+<p>@coords = (
+            [top_left_x1, top_left_y1, bot_left_x1, bot_left_y1],
+            [top_left_x2, top_left_y2, bot_left_x2, bot_left_y2],
+            ...
+           );</p>
+</dd>
+<dt><strong><a name="find_cell_corners" class="item"><strong>find_cell_corners</strong></a></strong></dt>
+
+<dd>
+<p>Returns the cell corners for the provided cell.</p>
+<p>(top_left_x, top_left_y, bot_left_x, bot_left_y) = <a href="#find_cell_corners"><code>find_cell_corners($cell)</code></a>;</p>
+</dd>
+<dt><strong><a name="find_cell_centre" class="item"><strong>find_cell_centre</strong></a></strong></dt>
+
+<dd>
+<p>Decodes the binary scheme of a given cell to determine the cell centre in pixel
+coordinates.</p>
+<p>(x, y, baselength) = find_cell_centre(cell);</p>
+</dd>
+<dt><strong><a name="get_cell_0" class="item"><strong>get_cell_0</strong></a></strong></dt>
+
+<dd>
+<p>Instantiates and returns a root cell (generation 0).</p>
+</dd>
+</dl>
+<p>
+</p>
+<hr />
+<h1><a name="utility_functions">UTILITY FUNCTIONS</a></h1>
+<p>Assorted debugging routines, including</p>
+<dl>
+<dt><strong><a name="print_cell" class="item"><strong>print_cell</strong></a></strong></dt>
+
+<dt><strong><a name="print_vector" class="item"><strong>print_vector</strong></a></strong></dt>
+
+<dt><strong><a name="toggle_debugging" class="item"><strong>toggle_debugging</strong></a></strong></dt>
+
+<dt><strong><a name="debug" class="item"><strong>debug</strong></a></strong></dt>
+
+<dt><strong><a name="debug_vector" class="item"><strong>debug_vector</strong></a></strong></dt>
+
+<dt><strong><a name="whowasi" class="item"><strong>whowasi</strong></a></strong></dt>
+
+</dl>
+<p>
+</p>
+<hr />
+<h1><a name="author">AUTHOR</a></h1>
+<p>Eric Saunders &lt;<a href="mailto:eric.saunders@gmail.com">eric.saunders@gmail.com</a>&gt;</p>
+<p>
+</p>
+<hr />
+<h1><a name="licence_and_copyright">LICENCE AND COPYRIGHT</a></h1>
+<p>Copyright 2008 Eric Saunders</p>
+<p>This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.</p>
+<p>This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.</p>
+<p>You should have received a copy of the GNU General Public License
+along with this program.  If not, see &lt;http://www.gnu.org/licenses/&gt;.</p>
+
+</body>
+
+</html>
